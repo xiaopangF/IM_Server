@@ -1,7 +1,7 @@
 #include <iostream>
 #include <windows.h>
 #include "DatabaseManager.h"
-#include "UserDAO.h"
+#include "UserService.h"
 
 using namespace std;
 
@@ -15,21 +15,27 @@ int main() {
         return -1;
     }
 
-    // 2. 测试插入用户
-    UserDAO userDAO;
-    bool ok = userDAO.insertUser("alice", "hash_password_123");
-    cout << (ok ? "✅ 用户 alice 插入成功" : "❌ 用户 alice 插入失败") << endl;
+    UserService userService;
 
-    // 3. 测试查询用户
-    auto user = userDAO.findUserByUsername("alice");
-    if (user) {
-        cout << "🔍 查询成功！" << endl;
-        cout << "   ID: " << user->getId() << endl;
-        cout << "   Username: " << user->getUsername() << endl;
-        cout << "   PasswordHash: " << user->getPasswordHash() << endl;
-    } else {
-        cout << "❌ 未找到用户 alice" << endl;
-    }
+    // 2. 测试注册
+    string errMsg;
+    bool ok = userService.registerUser("bob", "123456", errMsg);
+    cout << "注册结果: " << (ok ? "✅ 成功" : "❌ 失败: " + errMsg) << endl;
+
+    // 3. 测试重复注册
+    errMsg.clear();
+    ok = userService.registerUser("bob", "abcdef", errMsg);
+    cout << "重复注册结果: " << (ok ? "✅ 成功" : "❌ 失败: " + errMsg) << endl;
+
+    // 4. 测试登录（正确密码）
+    errMsg.clear();
+    auto user = userService.login("bob", "123456", errMsg);
+    cout << "登录（正确密码）: " << (user ? "✅ 成功，用户ID=" + to_string(user->getId()) : "❌ 失败: " + errMsg) << endl;
+
+    // 5. 测试登录（错误密码）
+    errMsg.clear();
+    user = userService.login("bob", "wrongpwd", errMsg);
+    cout << "登录（错误密码）: " << (user ? "✅ 成功" : "❌ 失败: " + errMsg) << endl;
 
     return 0;
 }
