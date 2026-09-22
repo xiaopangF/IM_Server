@@ -23,6 +23,9 @@ public:
     // 析构时自动关闭连接
     ~DatabaseManager();
 
+    // 执行预编译查询，返回 MYSQL_STMT*（调用者需要自己 fetch 和 close）
+    MYSQL_STMT* prepareStatement(const std::string& sql);
+
 private:
     DatabaseManager() = default;
     DatabaseManager(const DatabaseManager&) = delete;

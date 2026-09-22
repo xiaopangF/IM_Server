@@ -60,3 +60,21 @@ DatabaseManager::~DatabaseManager() {
         conn_ = nullptr;
     }
 }
+
+MYSQL_STMT* DatabaseManager::prepareStatement(const std::string& sql) {
+    if (conn_ == nullptr) return nullptr;
+
+    MYSQL_STMT* stmt = mysql_stmt_init(conn_);
+    if (stmt == nullptr) {
+        std::cerr << "❌ mysql_stmt_init 失败" << std::endl;
+        return nullptr;
+    }
+
+    if (mysql_stmt_prepare(stmt, sql.c_str(), sql.length()) != 0) {
+        std::cerr << "❌ mysql_stmt_prepare 失败: " << mysql_stmt_error(stmt) << std::endl;
+        mysql_stmt_close(stmt);
+        return nullptr;
+    }
+
+    return stmt;
+}

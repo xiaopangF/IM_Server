@@ -2,61 +2,170 @@
 #include "DatabaseManager.h"
 #include <mariadb/mysql.h>
 #include <iostream>
-#include <sstream>
+#include <cstring>
 
 bool UserDAO::insertUser(const std::string& username, const std::string& passwordHash) {
     auto& db = DatabaseManager::getInstance();
 
-    // ⚠️ 拼 SQL 是不安全的（SQL注入），但为了现阶段跑通，先用这个方式
-    // 后续我们会用 mysql_real_escape_string 或者 prepared statement 来防注入
-    std::string sql = "INSERT INTO users (username, password_hash) VALUES ('"
-                      + username + "', '" + passwordHash + "');";
+    // 用 ? 作为占位符
+    std::string sql = "INSERT INTO users (username, password_hash) VALUES (?, ?);";
+    MYSQL_STMT* stmt = db.prepareStatement(sql);
+    if (stmt == nullptr) return false;
 
-    return db.execute(sql);
+    // 准备参数
+    MYSQL_BIND params[2];
+    memset(params, 0, sizeof(params));
+
+    // 参数 1：username
+    unsigned long usernameLen = username.length();
+    params[0].buffer_type = MYSQL_TYPE_STRING;
+    params[0].buffer = (void*)username.c_str();
+    params[0].buffer_length = usernameLen;
+    params[0].length = &usernameLen;
+
+    // 参数 2：passwordHash
+    unsigned long hashLen = passwordHash.length();
+    params[1].buffer_type = MYSQL_TYPE_STRING;
+    params[1].buffer = (void*)passwordHash.c_str();
+    params[1].buffer_length = hashLen;
+    params[1].length = &hashLen;
+
+    // 绑定参数
+    if (mysql_stmt_bind_param(stmt, params) != 0) {
+        std::cerr << "❌ 绑定参数失败: " << mysql_stmt_error(stmt) << std::endl;
+        mysql_stmt_close(stmt);
+        return false;
+    }
+
+    // 执行
+    if (mysql_stmt_execute(stmt) != 0) {
+        std::cerr << "❌ 执行失败: " << mysql_stmt_error(stmt) << std::endl;
+        mysql_stmt_close(stmt);
+        return false;
+    }
+
+    mysql_stmt_close(stmt);
+    return true;
 }
 
 std::shared_ptr<User> UserDAO::findUserByUsername(const std::string& username) {
     auto& db = DatabaseManager::getInstance();
-    std::string sql = "SELECT id, username, password_hash FROM users WHERE username = '"
-                      + username + "' LIMIT 1;";
 
-    MYSQL_RES* res = db.query(sql);
-    if (res == nullptr) return nullptr;
+    // 用 ? 作为占位符
+    std::string sql = "SELECT id, username, password_hash FROM users WHERE username = ? LIMIT 1;";
+    MYSQL_STMT* stmt = db.prepareStatement(sql);
+    if (stmt == nullptr) return nullptr;
 
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (row == nullptr) {
-        mysql_free_result(res);
-        return nullptr; // 没找到用户
+    // 绑定参数
+    MYSQL_BIND param;
+    memset(&param, 0, sizeof(param));
+    unsigned long usernameLen = username.length();
+    param.buffer_type = MYSQL_TYPE_STRING;
+    param.buffer = (void*)username.c_str();
+    param.buffer_length = usernameLen;
+    param.length = &usernameLen;
+
+    if (mysql_stmt_bind_param(stmt, &param) != 0) {
+        std::cerr << "❌ 绑定参数失败: " << mysql_stmt_error(stmt) << std::endl;
+        mysql_stmt_close(stmt);
+        return nullptr;
     }
 
-    uint64_t id = std::stoull(row[0]);
-    std::string name = row[1];
-    std::string hash = row[2];
+    // 执行
+    if (mysql_stmt_execute(stmt) != 0) {
+        std::cerr << "❌ 执行失败: " << mysql_stmt_error(stmt) << std::endl;
+        mysql_stmt_close(stmt);
+        return nullptr;
+    }
 
-    mysql_free_result(res);
+    // 准备接收结果
+    uint64_t id = 0;
+    char nameBuf[64] = {0};
+    char hashBuf[256] = {0};
+    unsigned long nameLen = 0, hashLen = 0;
 
-    return std::make_shared<User>(id, name, hash);
+    MYSQL_BIND result[3];
+    memset(result, 0, sizeof(result));
+
+    result[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    result[0].buffer = &id;
+
+    result[1].buffer_type = MYSQL_TYPE_STRING;
+    result[1].buffer = nameBuf;
+    result[1].buffer_length = sizeof(nameBuf);
+    result[1].length = &nameLen;
+
+    result[2].buffer_type = MYSQL_TYPE_STRING;
+    result[2].buffer = hashBuf;
+    result[2].buffer_length = sizeof(hashBuf);
+    result[2].length = &hashLen;
+
+    if (mysql_stmt_bind_result(stmt, result) != 0) {
+        std::cerr << "❌ 绑定结果失败: " << mysql_stmt_error(stmt) << std::endl;
+        mysql_stmt_close(stmt);
+        return nullptr;
+    }
+
+    // 取一行
+    int fetchRet = mysql_stmt_fetch(stmt);
+    if (fetchRet != 0 && fetchRet != MYSQL_DATA_TRUNCATED) {
+        mysql_stmt_close(stmt);
+        return nullptr; // 没查到
+    }
+
+    std::shared_ptr<User> user = std::make_shared<User>(id, std::string(nameBuf, nameLen), std::string(hashBuf, hashLen));
+    mysql_stmt_close(stmt);
+    return user;
 }
 
 std::shared_ptr<User> UserDAO::findUserById(uint64_t userId) {
     auto& db = DatabaseManager::getInstance();
-    std::string sql = "SELECT id, username, password_hash FROM users WHERE id = "
-                      + std::to_string(userId) + " LIMIT 1;";
 
-    MYSQL_RES* res = db.query(sql);
-    if (res == nullptr) return nullptr;
+    std::string sql = "SELECT id, username, password_hash FROM users WHERE id = ? LIMIT 1;";
+    MYSQL_STMT* stmt = db.prepareStatement(sql);
+    if (stmt == nullptr) return nullptr;
 
-    MYSQL_ROW row = mysql_fetch_row(res);
-    if (row == nullptr) {
-        mysql_free_result(res);
+    MYSQL_BIND param;
+    memset(&param, 0, sizeof(param));
+    param.buffer_type = MYSQL_TYPE_LONGLONG;
+    param.buffer = &userId;
+
+    if (mysql_stmt_bind_param(stmt, &param) != 0 ||
+        mysql_stmt_execute(stmt) != 0) {
+        mysql_stmt_close(stmt);
         return nullptr;
     }
 
-    uint64_t id = std::stoull(row[0]);
-    std::string name = row[1];
-    std::string hash = row[2];
+    uint64_t id = 0;
+    char nameBuf[64] = {0};
+    char hashBuf[256] = {0};
+    unsigned long nameLen = 0, hashLen = 0;
 
-    mysql_free_result(res);
+    MYSQL_BIND result[3];
+    memset(result, 0, sizeof(result));
+    result[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    result[0].buffer = &id;
+    result[1].buffer_type = MYSQL_TYPE_STRING;
+    result[1].buffer = nameBuf;
+    result[1].buffer_length = sizeof(nameBuf);
+    result[1].length = &nameLen;
+    result[2].buffer_type = MYSQL_TYPE_STRING;
+    result[2].buffer = hashBuf;
+    result[2].buffer_length = sizeof(hashBuf);
+    result[2].length = &hashLen;
 
-    return std::make_shared<User>(id, name, hash);
+    if (mysql_stmt_bind_result(stmt, result) != 0) {
+        mysql_stmt_close(stmt);
+        return nullptr;
+    }
+
+    int fetchRet = mysql_stmt_fetch(stmt);
+    if (fetchRet != 0 && fetchRet != MYSQL_DATA_TRUNCATED) {
+        mysql_stmt_close(stmt);
+        return nullptr;
+    }
+
+    std::shared_ptr<User> user = std::make_shared<User>(id, std::string(nameBuf, nameLen), std::string(hashBuf, hashLen));
+    mysql_stmt_close(stmt);
+    return user;
 }
